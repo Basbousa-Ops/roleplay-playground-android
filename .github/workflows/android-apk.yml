@@ -24,7 +24,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
+
+      # NOTE: no 'cache: gradle' here — android/ is generated mid-run by
+      # 'cap add android', so no Gradle files exist yet at this point and
+      # setup-java's cache probe would fail the job.
 
       # NOTE: no android-actions/setup-android step — ubuntu-latest runners
       # already include the full Android SDK. setup-android@v3 crashes trying
