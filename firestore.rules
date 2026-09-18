@@ -1,0 +1,90 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all unknown paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Health check endpoint for connection verification
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    // Common security primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidPreset(data, userId) {
+      return data.userId == userId &&
+             data.userId is string &&
+             data.userPersona is map &&
+             data.systemInstructions is string &&
+             data.systemInstructions.size() <= 50000 &&
+             data.updatedAt is number;
+    }
+
+    function isValidSettings(data, userId) {
+      return data.userId == userId &&
+             data.userId is string &&
+             (!('apiKey' in data) || (data.apiKey is string && data.apiKey.size() <= 2000)) &&
+             (!('generationConfig' in data) || data.generationConfig is map) &&
+             data.updatedAt is number;
+    }
+
+    function isValidSession(data, userId) {
+      return data.userId == userId &&
+             data.id is string &&
+             data.id.size() <= 128 &&
+             data.title is string &&
+             data.title.size() <= 300 &&
+             data.createdAt is number &&
+             data.updatedAt is number &&
+             data.character is map &&
+             data.nodes is map &&
+             data.rootNodeId is string &&
+             data.activeLeafId is string;
+    }
+
+    // User Presets
+    match /users/{userId}/presets/{presetId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) &&
+                               isValidId(userId) &&
+                               isValidId(presetId) &&
+                               isValidPreset(request.resource.data, userId);
+      allow delete: if isOwner(userId) && isValidId(userId) && isValidId(presetId);
+    }
+
+    // User Settings (Cross-Device Synced API Keys & Preferences)
+    match /users/{userId}/settings/{settingId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) &&
+                               isValidId(userId) &&
+                               isValidId(settingId) &&
+                               isValidSettings(request.resource.data, userId);
+      allow delete: if isOwner(userId) && isValidId(userId) && isValidId(settingId);
+    }
+
+    // User Roleplay Sessions (including branched trees)
+    match /users/{userId}/sessions/{sessionId} {
+      allow read, list: if isOwner(userId);
+      allow create, update: if isOwner(userId) &&
+                               isValidId(userId) &&
+                               isValidId(sessionId) &&
+                               isValidSession(request.resource.data, userId);
+      allow delete: if isOwner(userId) && isValidId(userId) && isValidId(sessionId);
+    }
+  }
+}

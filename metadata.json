@@ -1,0 +1,8 @@
+{
+  "name": "Remix Roleplay Playground",
+  "description": "Roleplay Playground web application powered by Gemma 4 31B via Google Gen AI SDK with tree-based conversation branching and Supabase cloud synchronization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

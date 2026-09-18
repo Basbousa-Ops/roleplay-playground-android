@@ -1,0 +1,128 @@
+{
+  "entities": {
+    "userPreset": {
+      "title": "UserPreset",
+      "description": "Sticky user persona and system instruction presets",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The UID of the owning user"
+        },
+        "userPersona": {
+          "type": "object",
+          "description": "User persona with name, bio, and avatar"
+        },
+        "systemInstructions": {
+          "type": "string",
+          "description": "Persistent instructions for roleplay characters"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Timestamp when presets were last updated"
+        }
+      },
+      "required": ["userId", "userPersona", "systemInstructions", "updatedAt"]
+    },
+    "userSettings": {
+      "title": "UserSettings",
+      "description": "User account settings including cross-device synced Google AI Studio API key and generation parameters",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The UID of the owning user"
+        },
+        "apiKey": {
+          "type": "string",
+          "description": "User Google AI Studio API key synced across devices"
+        },
+        "generationConfig": {
+          "type": "object",
+          "description": "Synced Gemma 4 hyperparameter generation configuration"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Timestamp when settings were last updated"
+        }
+      },
+      "required": ["userId", "updatedAt"]
+    },
+    "roleplaySession": {
+      "title": "RoleplaySession",
+      "description": "Roleplay session containing character profile, metadata, and full branched conversation tree",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique session identifier"
+        },
+        "userId": {
+          "type": "string",
+          "description": "The UID of the owning user"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the roleplay session"
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Creation timestamp in milliseconds"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Last updated timestamp in milliseconds"
+        },
+        "character": {
+          "type": "object",
+          "description": "Character card details"
+        },
+        "userPersona": {
+          "type": "object",
+          "description": "User persona used in this session"
+        },
+        "systemInstructions": {
+          "type": "string",
+          "description": "System instructions used in this session"
+        },
+        "nodes": {
+          "type": "object",
+          "description": "Map of conversation nodes keyed by nodeId"
+        },
+        "rootNodeId": {
+          "type": "string",
+          "description": "Id of the root turn node"
+        },
+        "activeLeafId": {
+          "type": "string",
+          "description": "Id of the currently active branch leaf"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "title",
+        "createdAt",
+        "updatedAt",
+        "character",
+        "nodes",
+        "rootNodeId",
+        "activeLeafId"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/presets/{presetId}": {
+      "schema": "userPreset",
+      "description": "User sticky roleplay persona and instruction presets"
+    },
+    "/users/{userId}/settings/{settingId}": {
+      "schema": "userSettings",
+      "description": "User account settings including cross-device synced Google AI Studio API key"
+    },
+    "/users/{userId}/sessions/{sessionId}": {
+      "schema": "roleplaySession",
+      "description": "User roleplay sessions with full conversation branching trees"
+    }
+  }
+}

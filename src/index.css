@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/* ---- Capacitor / Android adaptations (web UI stays identical) ---- */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  /* Prevent overscroll glow + pull-to-refresh fighting the chat scroll */
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+  /* Avoid the WebView auto-zooming chat inputs on focus */
+  touch-action: manipulation;
+}
+
+/* Respect display cutouts / gesture bars on Android */
+.capacitor-safe-top {
+  padding-top: var(--sat);
+}
+
+.capacitor-safe-bottom {
+  padding-bottom: var(--sab);
+}
+
+/* Keep long roleplay prose readable on narrow phones */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px; /* prevents Android WebView zoom-on-focus */
+  }
+}
