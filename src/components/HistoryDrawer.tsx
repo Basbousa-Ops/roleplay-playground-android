@@ -126,9 +126,13 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
         className="absolute inset-0 bg-black/60 backdrop-blur-xs transition-opacity"
       />
 
-      {/* Slide-over Drawer */}
-      <div className="absolute inset-y-0 right-0 max-w-full flex pl-10">
-        <div className="w-screen max-w-md bg-zinc-925 border-l border-zinc-800 shadow-2xl flex flex-col">
+      {/* Slide-over Drawer — full-width on phones (no side peek that would
+          overflow a 360px screen), capped slide-over on larger screens */}
+      <div className="absolute inset-y-0 right-0 flex w-full sm:w-auto justify-end sm:pl-10">
+        <div
+          className="w-full sm:w-screen sm:max-w-md bg-zinc-925 border-l border-zinc-800 shadow-2xl flex flex-col min-w-0"
+          style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+        >
           {/* Drawer Header */}
           <div className="p-5 border-b border-zinc-800 bg-zinc-950 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -193,24 +197,24 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
                   {activeSession.title}
                 </span>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 min-w-0">
                 <button
                   id="btn-export-transcript"
                   onClick={(e) => handleDownloadTranscript(activeSession, e)}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-zinc-200 text-xs font-medium border border-zinc-700/60 transition-colors cursor-pointer"
+                  className="flex-1 min-w-0 flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-zinc-200 text-xs font-medium border border-zinc-700/60 transition-colors cursor-pointer"
                   title="Download clean script (.txt)"
                 >
-                  <FileText className="w-3.5 h-3.5 text-violet-400" />
-                  <span>Transcript (.txt)</span>
+                  <FileText className="w-3.5 h-3.5 text-violet-400 flex-shrink-0" />
+                  <span className="truncate">Transcript (.txt)</span>
                 </button>
                 <button
                   id="btn-export-raw-json"
                   onClick={(e) => handleDownloadRawJson(activeSession, e)}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-zinc-200 text-xs font-medium border border-zinc-700/60 transition-colors cursor-pointer"
+                  className="flex-1 min-w-0 flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-zinc-200 text-xs font-medium border border-zinc-700/60 transition-colors cursor-pointer"
                   title="Download raw tree backup (.json)"
                 >
-                  <Download className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Raw Tree (.json)</span>
+                  <Download className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
+                  <span className="truncate">Raw Tree (.json)</span>
                 </button>
               </div>
             </div>
@@ -290,7 +294,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
                             </h3>
                             <button
                               onClick={(e) => startEditing(s, e)}
-                              className="opacity-0 group-hover:opacity-100 p-1 text-zinc-400 hover:text-zinc-200 transition-opacity"
+                              className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1.5 -m-0.5 text-zinc-400 hover:text-zinc-200 transition-opacity flex-shrink-0"
                               title="Rename chat"
                             >
                               <Edit2 className="w-3 h-3" />
@@ -302,13 +306,13 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
                           Partner: <span className="text-zinc-300">{s.character.name}</span>
                         </p>
 
-                        <div className="flex items-center gap-3 mt-1.5 text-[10px] text-zinc-500">
-                          <span className="flex items-center gap-1">
+                        <div className="flex items-center gap-3 mt-1.5 text-[10px] text-zinc-500 flex-wrap">
+                          <span className="flex items-center gap-1 whitespace-nowrap">
                             <GitBranch className="w-3 h-3 text-zinc-500" />
                             {nodeCount} {nodeCount === 1 ? 'node' : 'nodes'}
                           </span>
                           <span>•</span>
-                          <span>{lastUpdated}</span>
+                          <span className="truncate">{lastUpdated}</span>
                         </div>
                       </div>
                     </div>

@@ -238,12 +238,14 @@ export function buildSystemInstruction(
       `After the </thought> closing tag, produce your complete narrative action (*actions*) and spoken dialogue ("dialogue").`
     );
   } else {
-    // Default: 'minimal'
+    // Default: 'minimal' — no visible reasoning block at all. The model answers
+    // directly in character voice, which is faster and burns far fewer output
+    // tokens (and rate-limit quota) than writing a thought essay every turn.
+    // Deep backend reasoning still applies via the API thinking level.
     parts.push(
       ``,
       `## REASONING & CHARACTER PERSPECTIVE (THINKING LEVEL: MINIMAL - DEFAULT)`,
-      `Before delivering your narrative response, formulate a brief, concise reflection of ${charName}'s immediate instinctive reaction and emotional pulse inside a short <thought>...</thought> block. Keep thoughts concise and tightly focused so spontaneous dialogue and storytelling remain vivid, organic, and natural.`,
-      `After the </thought> closing tag, produce your complete narrative action (*actions*) and spoken dialogue ("dialogue").`
+      `Respond directly with ${charName}'s complete narrative action (*actions*) and spoken dialogue ("dialogue"). Do not write any <thought> block, preamble, or internal monologue — stay fully in character voice from the first word while keeping the responses vivid, organic, and natural.`
     );
   }
 
@@ -428,7 +430,27 @@ export function describeApiError(err: any): string {
 }
 
 const MAX_ATTEMPTS = 5;
+const MAX_QUOTA_RETRIES = 2;
 const STALL_MS = 60000; // no data for 60s => treat stream as dead, retry
+
+/**
+ * Extracts a server-suggested wait (Google 429s often say "retry in 32.3s").
+ * Retrying earlier than asked just burns more quota.
+ */
+export function parseRetryDelayMs(err: any): number | null {
+  const msg = String(err?.message || err);
+  const match = msg.match(/(?:retr(?:y|ies)|try again).*?in\s+([\d.]+)\s*(ms|msec|s|sec|seconds?|m|min|minutes?)?/i);
+  if (!match) return null;
+  const value = parseFloat(match[1]);
+  if (!isFinite(value)) return null;
+  const unit = (match[2] || 's').toLowerCase();
+  let ms: number;
+  if (unit.startsWith('ms')) ms = value;
+  else if (unit.startsWith('m')) ms = value * 60000;
+  else ms = value * 1000;
+  if (ms <= 0) return null;
+  return Math.min(Math.round(ms), 120000);
+}
 
 function sleepCancellable(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -642,6 +664,7 @@ export async function streamGeminiChat({
 
     let configLevel = 0;
     let lastError: any = null;
+    let quotaRetries = 0;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (signal?.aborted || settled) return;
@@ -705,8 +728,30 @@ export async function streamGeminiChat({
           continue;
         }
 
-        // Rate limits / network wobbles: back off and retry, else give up.
-        if ((cls === 'quota' || cls === 'transient') && attempt < MAX_ATTEMPTS) {
+        // Rate limits: honor the server-suggested wait (Google 429s usually say
+        // "retry in Ns") instead of hammering — every early retry burns more
+        // quota. Few, patient retries, then a clean failure with a Retry button.
+        if (cls === 'quota' && quotaRetries < MAX_QUOTA_RETRIES) {
+          quotaRetries += 1;
+          const serverDelay = parseRetryDelayMs(err);
+          const delayMs =
+            (serverDelay ?? 20000 * quotaRetries) + Math.random() * 1000;
+          const waitNote =
+            serverDelay != null
+              ? `Rate limited — server asked to wait ${Math.round(delayMs / 1000)}s, retrying…`
+              : `Rate limited — waiting ${Math.round(delayMs / 1000)}s before retry…`;
+          console.warn(`Gemini quota (retry ${quotaRetries}/${MAX_QUOTA_RETRIES} in ${Math.round(delayMs)}ms):`, err);
+          onRetry?.(attempt, MAX_ATTEMPTS, Math.round(delayMs), waitNote);
+          try {
+            await sleepCancellable(delayMs, signal);
+          } catch {
+            return; // aborted during backoff
+          }
+          continue;
+        }
+
+        // Network wobbles: quick back off and retry, else give up.
+        if (cls === 'transient' && attempt < MAX_ATTEMPTS) {
           const delayMs =
             Math.min(1500 * 2 ** (attempt - 1), 12000) + Math.random() * 500;
           console.warn(
@@ -717,9 +762,7 @@ export async function streamGeminiChat({
             attempt,
             MAX_ATTEMPTS,
             Math.round(delayMs),
-            cls === 'quota'
-              ? 'Rate limited — retrying automatically…'
-              : 'Connection wobble — retrying automatically…'
+            'Connection wobble — retrying automatically…'
           );
           try {
             await sleepCancellable(delayMs, signal);
