@@ -153,6 +153,7 @@ export default function App() {
   const [retryNotice, setRetryNotice] = useState<string | null>(null);
   const [generationError, setGenerationError] = useState<{
     message: string;
+    raw?: string | null;
     retryUserNodeId?: string;
     retryContinueNodeId?: string;
   } | null>(null);
@@ -558,7 +559,11 @@ export default function App() {
         const cleanedSession = removeLeafNode(sessionWithAssistant, assistantNodeId);
         updateActiveSession(cleanedSession);
         syncSessionIfConnected(cleanedSession);
-        setGenerationError({ message: err.message, retryUserNodeId: userNodeId });
+        setGenerationError({
+          message: err.message,
+          raw: (err as any).rawDetail ?? null,
+          retryUserNodeId: userNodeId,
+        });
         setIsStreaming(false);
         setStreamingContent('');
         setStreamingNodeId(null);
@@ -698,7 +703,11 @@ export default function App() {
       onError: (err) => {
         console.error('Gemma continuation error:', err);
         // Original message is untouched (partial text was never written).
-        setGenerationError({ message: err.message, retryContinueNodeId: assistantNodeId });
+        setGenerationError({
+          message: err.message,
+          raw: (err as any).rawDetail ?? null,
+          retryContinueNodeId: assistantNodeId,
+        });
         setIsStreaming(false);
         setStreamingContent('');
         setStreamingNodeId(null);
@@ -975,6 +984,16 @@ export default function App() {
             <div className="flex-1 min-w-0">
               <p className="font-semibold">Generation failed</p>
               <p className="text-[11px] text-amber-300/80 mt-0.5">{generationError.message}</p>
+              {generationError.raw && (
+                <details className="mt-1.5">
+                  <summary className="text-[11px] text-amber-300/60 hover:text-amber-200 cursor-pointer font-mono">
+                    Technical details (send me this)
+                  </summary>
+                  <pre className="mt-1 p-2 rounded-lg bg-black/40 border border-amber-800/40 text-[10px] font-mono text-amber-100/80 whitespace-pre-wrap break-words select-all">
+                    {generationError.raw}
+                  </pre>
+                </details>
+              )}
             </div>
             <button
               type="button"

@@ -430,8 +430,21 @@ export function describeApiError(err: any): string {
 }
 
 const MAX_ATTEMPTS = 5;
-const MAX_QUOTA_RETRIES = 2;
-const STALL_MS = 60000; // no data for 60s => treat stream as dead, retry
+const MAX_QUOTA_RETRIES = 1;
+const STALL_MS = 60000; // mid-stream silence: treat stream as dead, retry
+const FIRST_TOKEN_TIMEOUT_MS = 120000; // slow mobile networks need longer for the first token
+
+/**
+ * Compact raw summary (HTTP status + first part of the message) attached to
+ * user-facing errors so the UI can show technical details. Never guess from
+ * the friendly text alone.
+ */
+export function rawSummary(err: any): string {
+  const status =
+    typeof err?.status === 'number' ? `HTTP ${err.status}` : 'no HTTP status';
+  const msg = String(err?.message || err).slice(0, 500);
+  return `${status} — ${msg}`;
+}
 
 /**
  * Extracts a server-suggested wait (Google 429s often say "retry in 32.3s").
@@ -632,7 +645,9 @@ export async function streamGeminiChat({
     };
 
     // The initial request itself can hang on bad mobile networks: race it
-    // against a timeout + the caller's abort signal.
+    // against a generous first-token timeout + the caller's abort signal.
+    // (First token legitimately takes longer than mid-stream gaps, so this
+    // timeout is roomier than STALL_MS.)
     const requestStream = (): Promise<any> => {
       const pending: Promise<any> = ai.models.generateContentStream({
         model: GEMINI_MODEL,
@@ -642,7 +657,7 @@ export async function streamGeminiChat({
       // Silence unhandled-rejection noise if timeout/abort wins the race.
       pending.catch(() => {});
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(stallError()), STALL_MS);
+        const timer = setTimeout(() => reject(stallError()), FIRST_TOKEN_TIMEOUT_MS);
         const onAbort = () => {
           reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
         };
@@ -665,21 +680,33 @@ export async function streamGeminiChat({
     let configLevel = 0;
     let lastError: any = null;
     let quotaRetries = 0;
+    // The currently-consumed stream, if any. Closed (best-effort server
+    // cancel) before any retry so an abandoned request can't keep burning
+    // quota in the background while its replacement runs.
+    let activeIter: AsyncIterator<any> | null = null;
+    const closeActiveIter = async () => {
+      const it = activeIter;
+      activeIter = null;
+      if (it) {
+        try {
+          await it.return?.();
+        } catch {}
+      }
+    };
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (signal?.aborted || settled) return;
 
       try {
         const responseStream: any = await requestStream();
-        const iter = responseStream[Symbol.asyncIterator]();
+        const iter: AsyncIterator<any> = responseStream[Symbol.asyncIterator]();
+        activeIter = iter;
         let attemptText = '';
         let attemptUsage: TokenUsage | undefined = undefined;
 
         while (true) {
           if (signal?.aborted || settled) {
-            try {
-              await iter.return?.();
-            } catch {}
+            await closeActiveIter();
             return;
           }
 
@@ -687,7 +714,10 @@ export async function streamGeminiChat({
           try {
             result = await nextChunkWithTimeout(iter, STALL_MS, signal);
           } catch (chunkErr: any) {
-            if (chunkErr?.name === 'AbortError' || signal?.aborted) return;
+            if (chunkErr?.name === 'AbortError' || signal?.aborted) {
+              await closeActiveIter();
+              return;
+            }
             throw chunkErr; // stall or broken stream -> retry path below
           }
 
@@ -711,9 +741,16 @@ export async function streamGeminiChat({
         }
 
         safeOnDone(attemptText, attemptUsage);
+        activeIter = null;
         return;
       } catch (err: any) {
-        if (err?.name === 'AbortError' || signal?.aborted || settled) return;
+        if (err?.name === 'AbortError' || signal?.aborted || settled) {
+          await closeActiveIter();
+          return;
+        }
+        // Abandon the dead/broken stream before retrying so it can't keep
+        // running server-side and double-spend quota alongside its replacement.
+        await closeActiveIter();
         lastError = err;
         const cls = classifyApiError(err);
 
@@ -778,7 +815,10 @@ export async function streamGeminiChat({
 
     if (!settled) {
       console.error('Gemini generation failed after retries:', lastError);
-      safeOnError(new Error(describeApiError(lastError)));
+      const friendly = new Error(describeApiError(lastError));
+      // Carry the raw API truth along for the UI's technical-details view.
+      (friendly as any).rawDetail = rawSummary(lastError);
+      safeOnError(friendly);
     }
   } catch (err: any) {
     if (signal?.aborted) {
