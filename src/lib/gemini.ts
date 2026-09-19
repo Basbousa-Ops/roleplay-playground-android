@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import {
   ConversationNode,
   RoleplaySession,
@@ -349,6 +349,140 @@ export interface StreamGeminiParams {
   onToken: (token: string, accumulated: string) => void;
   onDone: (fullText: string, verifiedUsage?: TokenUsage) => void;
   onError: (error: Error) => void;
+  /** Fired before an automatic retry (rate limit / network wobble). */
+  onRetry?: (attempt: number, maxAttempts: number, delayMs: number, reason: string) => void;
+}
+
+export type ApiErrorClass =
+  | 'auth'
+  | 'quota'
+  | 'notFound'
+  | 'badRequest'
+  | 'transient'
+  | 'aborted'
+  | 'unknown';
+
+/**
+ * Classifies an API failure so the UI can tell the user what is actually
+ * wrong (expired key vs. per-minute rate limit vs. dead network) instead of
+ * showing a generic scary message.
+ */
+export function classifyApiError(err: any): ApiErrorClass {
+  if (!err) return 'unknown';
+  if (err?.name === 'AbortError') return 'aborted';
+  const status = typeof err?.status === 'number' ? err.status : undefined;
+  const msg = String(err?.message || err);
+
+  if (
+    status === 401 ||
+    status === 403 ||
+    /api key.*(invalid|expired|not valid|rejected)|invalid.*api key|permission denied/i.test(msg)
+  ) {
+    return 'auth';
+  }
+  if (status === 404 || /model.*not found|not_found/i.test(msg)) {
+    return 'notFound';
+  }
+  if (
+    status === 429 ||
+    /quota|rate.?limit|resource.?exhausted|too many requests|\b429\b/i.test(msg)
+  ) {
+    return 'quota';
+  }
+  if (
+    status === undefined ||
+    status === 408 ||
+    status >= 500 ||
+    err instanceof TypeError ||
+    /fetch failed|network|ETIMEDOUT|ECONN|EAI_AGAIN|socket|timeout|stalled|Failed to fetch|Load failed/i.test(
+      msg
+    )
+  ) {
+    return 'transient';
+  }
+  if (status === 400) return 'badRequest';
+  return 'unknown';
+}
+
+/**
+ * Human-readable, actionable explanation for an API failure.
+ */
+export function describeApiError(err: any): string {
+  const raw = String(err?.message || 'Unknown error');
+  switch (classifyApiError(err)) {
+    case 'auth':
+      return 'Your Google AI Studio API key was rejected. Open Settings and paste a fresh key from aistudio.google.com/apikey.';
+    case 'quota':
+      return 'Rate limit reached (429). Nothing is wrong with your setup or quota — this is the per-minute limit. Wait about a minute, then retry. (Branching/regenerating right after a reply hits it fastest.)';
+    case 'notFound':
+      return `The model "${GEMINI_MODEL}" is not available for this key/project right now.`;
+    case 'badRequest':
+      return `The request was rejected by the API: ${raw}`;
+    case 'transient':
+      return `Network wobble (${raw}). Your chat is untouched — just retry.`;
+    case 'aborted':
+      return 'Generation stopped.';
+    default:
+      return raw;
+  }
+}
+
+const MAX_ATTEMPTS = 5;
+const STALL_MS = 60000; // no data for 60s => treat stream as dead, retry
+
+function sleepCancellable(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function stallError(): Error {
+  return new Error(
+    'Stream stalled (no data for 60s). The mobile connection likely dropped mid-reply.'
+  );
+}
+
+/** Awaits the next chunk, but gives up if the stream goes silent. */
+function nextChunkWithTimeout<T>(
+  iter: AsyncIterator<T>,
+  ms: number,
+  signal?: AbortSignal
+): Promise<IteratorResult<T>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      reject(stallError());
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    iter.next().then(
+      (value) => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (e) => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        reject(e);
+      }
+    );
+  });
 }
 
 /**
@@ -367,6 +501,7 @@ export async function streamGeminiChat({
   onToken,
   onDone,
   onError,
+  onRetry,
 }: StreamGeminiParams): Promise<void> {
   const resolvedKey = (apiKey || getStoredApiKey()).trim();
 
@@ -402,8 +537,7 @@ export async function streamGeminiChat({
       return;
     }
 
-    let verifiedUsage: TokenUsage | undefined = undefined;
-    let fullText = '';
+    // (verifiedUsage / fullText are scoped per attempt inside the retry loop below)
 
     const safetySettings = [
       {
@@ -428,18 +562,27 @@ export async function streamGeminiChat({
       },
     ];
 
-    const generateWithConfig = async (fallbackMode: boolean = false) => {
+    // Config levels: full features -> drop thinking/extras -> minimal core.
+    // A 400 (bad request) advances a level (the model may not accept a field);
+    // rate limits / network errors keep the level and just back off.
+    const buildConfig = (level: number): any => {
       const configObj: any = {
         systemInstruction,
         temperature: genConfig.temperature,
         topP: genConfig.topP,
         topK: genConfig.topK,
-        maxOutputTokens: genConfig.maxOutputTokens,
+        maxOutputTokens:
+          level >= 2 ? Math.min(genConfig.maxOutputTokens, 4096) : genConfig.maxOutputTokens,
         safetySettings,
       };
 
-      // Only include penalties if non-zero and not in fallback mode
-      if (!fallbackMode) {
+      if (level === 0) {
+        // Level 0 sends the REAL thinking level to the API, so 'minimal' is
+        // genuinely minimal here — not just a prompt hint.
+        configObj.thinkingConfig = {
+          thinkingLevel:
+            genConfig.thinkingLevel === 'high' ? ThinkingLevel.HIGH : ThinkingLevel.MINIMAL,
+        };
         if (typeof genConfig.presencePenalty === 'number' && genConfig.presencePenalty !== 0) {
           configObj.presencePenalty = genConfig.presencePenalty;
         }
@@ -448,43 +591,152 @@ export async function streamGeminiChat({
         }
       }
 
-      return await ai.models.generateContentStream({
+      return configObj;
+    };
+
+    // Guards against double-settling when a stalled stream resolves late.
+    let settled = false;
+    const safeOnDone = (text: string, usage?: TokenUsage) => {
+      if (!settled) {
+        settled = true;
+        onDone(text, usage);
+      }
+    };
+    const safeOnError = (err: any) => {
+      if (!settled) {
+        settled = true;
+        onError(err instanceof Error ? err : new Error(String(err?.message || err)));
+      }
+    };
+
+    // The initial request itself can hang on bad mobile networks: race it
+    // against a timeout + the caller's abort signal.
+    const requestStream = (): Promise<any> => {
+      const pending: Promise<any> = ai.models.generateContentStream({
         model: GEMINI_MODEL,
         contents,
-        config: configObj,
+        config: buildConfig(configLevel),
+      });
+      // Silence unhandled-rejection noise if timeout/abort wins the race.
+      pending.catch(() => {});
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(stallError()), STALL_MS);
+        const onAbort = () => {
+          reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        pending.then(
+          (value) => {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
+            resolve(value);
+          },
+          (e) => {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
+            reject(e);
+          }
+        );
       });
     };
 
-    let responseStream;
-    try {
-      responseStream = await generateWithConfig(false);
-    } catch (apiErr: any) {
-      console.warn('API returned error with generation parameters, retrying with core config:', apiErr);
-      responseStream = await generateWithConfig(true);
-    }
+    let configLevel = 0;
+    let lastError: any = null;
 
-    for await (const chunk of responseStream) {
-      if (signal?.aborted) {
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      if (signal?.aborted || settled) return;
+
+      try {
+        const responseStream: any = await requestStream();
+        const iter = responseStream[Symbol.asyncIterator]();
+        let attemptText = '';
+        let attemptUsage: TokenUsage | undefined = undefined;
+
+        while (true) {
+          if (signal?.aborted || settled) {
+            try {
+              await iter.return?.();
+            } catch {}
+            return;
+          }
+
+          let result: IteratorResult<any>;
+          try {
+            result = await nextChunkWithTimeout(iter, STALL_MS, signal);
+          } catch (chunkErr: any) {
+            if (chunkErr?.name === 'AbortError' || signal?.aborted) return;
+            throw chunkErr; // stall or broken stream -> retry path below
+          }
+
+          if (result.done) break;
+          const chunk: any = result.value;
+
+          // Check for token usage metadata
+          if (chunk.usageMetadata) {
+            attemptUsage = {
+              total_tokens: chunk.usageMetadata.totalTokenCount,
+              prompt_tokens: chunk.usageMetadata.promptTokenCount,
+              completion_tokens: chunk.usageMetadata.candidatesTokenCount,
+            };
+          }
+
+          const text = chunk.text;
+          if (text) {
+            attemptText += text;
+            onToken(text, attemptText);
+          }
+        }
+
+        safeOnDone(attemptText, attemptUsage);
+        return;
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || signal?.aborted || settled) return;
+        lastError = err;
+        const cls = classifyApiError(err);
+
+        // Model rejected a setting: simplify config and retry immediately.
+        if (cls === 'badRequest' && configLevel < 2) {
+          configLevel += 1;
+          console.warn(
+            `Gemini 400 at config level ${configLevel - 1}, retrying simplified (level ${configLevel}):`,
+            err
+          );
+          onRetry?.(attempt, MAX_ATTEMPTS, 0, 'Model rejected a setting — retrying simplified…');
+          continue;
+        }
+
+        // Rate limits / network wobbles: back off and retry, else give up.
+        if ((cls === 'quota' || cls === 'transient') && attempt < MAX_ATTEMPTS) {
+          const delayMs =
+            Math.min(1500 * 2 ** (attempt - 1), 12000) + Math.random() * 500;
+          console.warn(
+            `Gemini ${cls} (attempt ${attempt}/${MAX_ATTEMPTS}), retrying in ${Math.round(delayMs)}ms:`,
+            err
+          );
+          onRetry?.(
+            attempt,
+            MAX_ATTEMPTS,
+            Math.round(delayMs),
+            cls === 'quota'
+              ? 'Rate limited — retrying automatically…'
+              : 'Connection wobble — retrying automatically…'
+          );
+          try {
+            await sleepCancellable(delayMs, signal);
+          } catch {
+            return; // aborted during backoff
+          }
+          continue;
+        }
+
         break;
       }
-
-      // Check for token usage metadata
-      if (chunk.usageMetadata) {
-        verifiedUsage = {
-          total_tokens: chunk.usageMetadata.totalTokenCount,
-          prompt_tokens: chunk.usageMetadata.promptTokenCount,
-          completion_tokens: chunk.usageMetadata.candidatesTokenCount,
-        };
-      }
-
-      const text = chunk.text;
-      if (text) {
-        fullText += text;
-        onToken(text, fullText);
-      }
     }
 
-    onDone(fullText, verifiedUsage);
+    if (!settled) {
+      console.error('Gemini generation failed after retries:', lastError);
+      safeOnError(new Error(describeApiError(lastError)));
+    }
   } catch (err: any) {
     if (signal?.aborted) {
       return;

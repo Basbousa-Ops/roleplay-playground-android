@@ -188,6 +188,38 @@ export function updateNodeContent(
 }
 
 /**
+ * Removes a leaf node (e.g. a failed generation placeholder) and rewinds the
+ * active leaf to its parent. Refuses to remove nodes that have children so a
+ * failed retry can never orphan an existing branch.
+ */
+export function removeLeafNode(
+  session: RoleplaySession,
+  nodeId: string
+): RoleplaySession {
+  const target = session.nodes[nodeId];
+  if (!target || target.childrenIds.length > 0) return session;
+
+  const parentId = target.parentId;
+  const nodes = { ...session.nodes };
+  delete nodes[nodeId];
+
+  if (parentId && nodes[parentId]) {
+    const parent = nodes[parentId];
+    nodes[parentId] = {
+      ...parent,
+      childrenIds: parent.childrenIds.filter((id) => id !== nodeId),
+    };
+  }
+
+  return {
+    ...session,
+    nodes,
+    activeLeafId: parentId && nodes[parentId] ? parentId : session.rootNodeId,
+    updatedAt: Date.now(),
+  };
+}
+
+/**
  * Formats active timeline into a clean plain text script
  */
 export function exportTranscript(session: RoleplaySession): string {

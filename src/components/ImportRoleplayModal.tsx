@@ -102,7 +102,7 @@ export const ImportRoleplayModal: React.FC<ImportRoleplayModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm select-none animate-fadeIn">
       <div
-        className="w-full max-w-xl bg-zinc-925 border border-zinc-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden max-h-[90vh]"
+        className="w-full max-w-xl bg-zinc-925 border border-zinc-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden max-h-[90dvh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

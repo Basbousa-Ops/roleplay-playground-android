@@ -22,7 +22,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
 }) => {
   return (
-    <header className="h-16 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30 select-none">
+    <header className="h-16 flex-shrink-0 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30 select-none">
       {/* Left: Active Character Info & Model Badge */}
       <div className="flex items-center gap-3.5 min-w-0">
         <div className="relative group flex-shrink-0">

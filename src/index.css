@@ -1,5 +1,29 @@
 @import "tailwindcss";
 
+/* Design tokens the components rely on but Tailwind doesn't ship:
+   intermediate zinc shades, the xs breakpoint, and the fadeIn animation.
+   Without these, `bg-zinc-850`, `border-zinc-750`, `xs:inline` and
+   `animate-fadeIn` silently generate no CSS (missing backgrounds/borders,
+   labels that never appear). */
+@theme {
+  --color-zinc-750: #323237;
+  --color-zinc-850: #1f1f23;
+  --color-zinc-925: #131316;
+
+  --breakpoint-xs: 26rem;
+
+  --animate-fadeIn: fadeIn 0.25s ease-out;
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}
+
 /* ---- Capacitor / Android adaptations (web UI stays identical) ---- */
 :root {
   --sat: env(safe-area-inset-top, 0px);

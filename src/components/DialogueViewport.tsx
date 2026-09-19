@@ -21,11 +21,295 @@ interface DialogueViewportProps {
   isStreaming: boolean;
   streamingContent: string;
   streamingNodeId: string | null;
+  retryNotice?: string | null;
   onSwitchBranch: (nodeId: string, direction: 'prev' | 'next') => void;
   onRegenerate: (nodeId: string) => void;
   onContinue: (nodeId: string) => void;
   onEditMessage: (node: ConversationNode) => void;
 }
+
+interface MessageBubbleProps {
+  nodeId: string;
+  isUser: boolean;
+  displayContent: string;
+  timestamp: string;
+  turnIndex: number;
+  hasVerifiedTokenUsage: boolean;
+  totalTokens?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  userName: string;
+  userAvatar: string;
+  charName: string;
+  charAvatar: string;
+  siblingIndex: number;
+  siblingTotal: number;
+  hasSiblings: boolean;
+  isStreaming: boolean;
+  isCurrentStreamingNode: boolean;
+  retryNotice?: string | null;
+  isCopied: boolean;
+  onSwitchBranch: (nodeId: string, direction: 'prev' | 'next') => void;
+  onRegenerate: (nodeId: string) => void;
+  onContinue: (nodeId: string) => void;
+  onEdit: () => void;
+  onCopy: () => void;
+}
+
+/**
+ * Single chat bubble, memoized with a data-only comparison.
+ * During streaming the parent re-renders on every token; without this, every
+ * message (and its full markdown parse) would re-render each time — the main
+ * source of jank on phones in long chats. Callbacks are intentionally
+ * excluded from the comparison (identical behavior across renders).
+ */
+const MessageBubble = React.memo(
+  function MessageBubble({
+    nodeId,
+    isUser,
+    displayContent,
+    timestamp,
+    turnIndex,
+    hasVerifiedTokenUsage,
+    totalTokens,
+    promptTokens,
+    completionTokens,
+    userName,
+    userAvatar,
+    charName,
+    charAvatar,
+    siblingIndex,
+    siblingTotal,
+    hasSiblings,
+    isStreaming,
+    isCurrentStreamingNode,
+    retryNotice,
+    isCopied,
+    onSwitchBranch,
+    onRegenerate,
+    onContinue,
+    onEdit,
+    onCopy,
+  }: MessageBubbleProps) {
+    return (
+      <div
+        key={nodeId}
+        id={`msg-node-${nodeId}`}
+        className={`group relative flex gap-3.5 sm:gap-4.5 transition-all ${
+          isUser ? 'flex-row-reverse' : 'flex-row'
+        }`}
+      >
+        {/* Avatar */}
+        <div className="flex-shrink-0 pt-0.5">
+          <div
+            className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden flex items-center justify-center ring-1 shadow-sm ${
+              isUser
+                ? 'bg-zinc-800 ring-zinc-700/80'
+                : 'bg-violet-950/60 ring-violet-700/50'
+            }`}
+          >
+            {isUser ? (
+              userAvatar ? (
+                <img
+                  src={userAvatar}
+                  alt={userName}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = 'none';
+                  }}
+                />
+              ) : (
+                <User className="w-4 h-4 text-zinc-300" />
+              )
+            ) : charAvatar ? (
+              <img
+                src={charAvatar}
+                alt={charName}
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                }}
+              />
+            ) : (
+              <Bot className="w-4 h-4 text-violet-300" />
+            )}
+          </div>
+        </div>
+
+        {/* Message Content & Controls */}
+        <div
+          className={`flex flex-col min-w-0 max-w-[86%] sm:max-w-[80%] ${
+            isUser ? 'items-end' : 'items-start'
+          }`}
+        >
+          {/* Header (Speaker Name, Turn #, Timestamp) */}
+          <div
+            className={`flex items-center gap-2 mb-1.5 text-xs text-zinc-400 select-none ${
+              isUser ? 'flex-row-reverse' : 'flex-row'
+            }`}
+          >
+            <span className="font-medium text-zinc-200 truncate max-w-[40vw] sm:max-w-none">
+              {isUser ? userName : charName}
+            </span>
+            <span className="text-zinc-600">•</span>
+            <span className="text-[11px] text-zinc-500 font-mono">
+              Turn {turnIndex}
+            </span>
+            <span className="text-zinc-600">•</span>
+            <span className="text-[11px] text-zinc-500">{timestamp}</span>
+
+            {/* Real token counter - ONLY shown if model returned verified usage */}
+            {hasVerifiedTokenUsage && (
+              <span
+                title={`Verified token count: ${totalTokens} total (${promptTokens ?? 0} prompt, ${completionTokens ?? 0} response)`}
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-mono text-zinc-400 bg-zinc-850 border border-zinc-700/60"
+              >
+                <Hash className="w-2.5 h-2.5 text-zinc-500" />
+                {totalTokens}t
+              </span>
+            )}
+          </div>
+
+          {/* Bubble Container */}
+          <div
+            className={`relative rounded-2xl p-4 sm:p-5 transition-all text-sm sm:text-base border shadow-md break-words w-full ${
+              isUser
+                ? 'bg-zinc-850/90 text-zinc-100 border-zinc-750 rounded-tr-sm'
+                : 'bg-zinc-900/90 text-zinc-200 border-zinc-800/80 rounded-tl-sm'
+            }`}
+          >
+            <RoleplayMarkdown content={displayContent} role={isUser ? 'user' : 'assistant'} />
+
+            {/* Pulsing indicator when generating */}
+            {isCurrentStreamingNode && (
+              <span className="inline-block w-2 h-4 ml-1 bg-violet-400 animate-pulse align-middle" />
+            )}
+
+            {/* Auto-retry notice (rate limit / network wobble) */}
+            {isCurrentStreamingNode && retryNotice && (
+              <div className="mt-2 text-[11px] text-amber-300/90 flex items-center gap-1.5 animate-fadeIn">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
+                <span>{retryNotice}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Inline Controls (Branch Navigator, Edit, Regenerate, Copy) */}
+          <div
+            className={`mt-2 flex items-center gap-1.5 flex-wrap select-none transition-opacity ${
+              isUser ? 'justify-end' : 'justify-start'
+            } ${isStreaming ? 'pointer-events-none opacity-40' : 'opacity-85 sm:opacity-75 sm:group-hover:opacity-100'}`}
+          >
+            {/* Branch Traversal Controls (< n / m >) */}
+            {hasSiblings && (
+              <div className="flex items-center rounded-lg bg-zinc-900/90 border border-zinc-800 px-1 py-0.5 text-xs text-zinc-300 shadow-sm mr-1">
+                <button
+                  id={`btn-prev-branch-${nodeId}`}
+                  onClick={() => onSwitchBranch(nodeId, 'prev')}
+                  className="p-1 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded transition-colors cursor-pointer"
+                  title="Previous alternate branch"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <span className="px-1.5 font-mono text-[11px] text-zinc-300">
+                  {siblingIndex + 1} / {siblingTotal}
+                </span>
+                <button
+                  id={`btn-next-branch-${nodeId}`}
+                  onClick={() => onSwitchBranch(nodeId, 'next')}
+                  className="p-1 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded transition-colors cursor-pointer"
+                  title="Next alternate branch"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Edit Message Button */}
+            <button
+              id={`btn-edit-${nodeId}`}
+              onClick={onEdit}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 rounded-md transition-colors cursor-pointer border border-transparent hover:border-zinc-700/60"
+              title={isUser ? "Edit & Resend (branches conversation)" : "Edit response text"}
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Edit</span>
+            </button>
+
+            {/* Regenerate Button (Assistant only) */}
+            {!isUser && (
+              <button
+                id={`btn-regen-${nodeId}`}
+                onClick={() => onRegenerate(nodeId)}
+                disabled={isStreaming}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-violet-400 hover:text-violet-300 hover:bg-violet-950/40 rounded-md transition-colors cursor-pointer border border-transparent hover:border-violet-800/50 disabled:opacity-40"
+                title="Generate alternate response branch from parent"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Regenerate</span>
+              </button>
+            )}
+
+            {/* Continue Button (Assistant only) */}
+            {!isUser && !isCurrentStreamingNode && (
+              <button
+                id={`btn-continue-${nodeId}`}
+                onClick={() => onContinue(nodeId)}
+                disabled={isStreaming}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-950/40 rounded-md transition-colors cursor-pointer border border-transparent hover:border-amber-800/50 disabled:opacity-40"
+                title="Continue writing response seamlessly from where it stopped"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span className="hidden sm:inline">Continue</span>
+              </button>
+            )}
+
+            {/* Copy Button */}
+            <button
+              id={`btn-copy-${nodeId}`}
+              onClick={onCopy}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 rounded-md transition-colors cursor-pointer"
+              title="Copy message to clipboard"
+            >
+              {isCopied ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-400 text-[11px]">Copied</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Copy</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  },
+  (prev, next) =>
+    prev.nodeId === next.nodeId &&
+    prev.isUser === next.isUser &&
+    prev.displayContent === next.displayContent &&
+    prev.timestamp === next.timestamp &&
+    prev.turnIndex === next.turnIndex &&
+    prev.hasVerifiedTokenUsage === next.hasVerifiedTokenUsage &&
+    prev.totalTokens === next.totalTokens &&
+    prev.userName === next.userName &&
+    prev.userAvatar === next.userAvatar &&
+    prev.charName === next.charName &&
+    prev.charAvatar === next.charAvatar &&
+    prev.siblingIndex === next.siblingIndex &&
+    prev.siblingTotal === next.siblingTotal &&
+    prev.hasSiblings === next.hasSiblings &&
+    prev.isStreaming === next.isStreaming &&
+    prev.isCurrentStreamingNode === next.isCurrentStreamingNode &&
+    prev.retryNotice === next.retryNotice &&
+    prev.isCopied === next.isCopied
+);
 
 export const DialogueViewport: React.FC<DialogueViewportProps> = ({
   session,
@@ -33,6 +317,7 @@ export const DialogueViewport: React.FC<DialogueViewportProps> = ({
   isStreaming,
   streamingContent,
   streamingNodeId,
+  retryNotice,
   onSwitchBranch,
   onRegenerate,
   onContinue,
@@ -71,7 +356,7 @@ export const DialogueViewport: React.FC<DialogueViewportProps> = ({
     <div
       ref={scrollContainerRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto px-3 sm:px-6 py-6 space-y-6 sm:space-y-8 scroll-smooth"
+      className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-6 space-y-6 sm:space-y-8 scroll-smooth"
     >
       <div className="max-w-4xl mx-auto space-y-6 sm:space-y-7">
         {timeline.map((node, index) => {
@@ -89,194 +374,34 @@ export const DialogueViewport: React.FC<DialogueViewportProps> = ({
             node.tokenUsage && typeof node.tokenUsage.total_tokens === 'number';
 
           return (
-            <div
+            <MessageBubble
               key={node.id}
-              id={`msg-node-${node.id}`}
-              className={`group relative flex gap-3.5 sm:gap-4.5 transition-all ${
-                isUser ? 'flex-row-reverse' : 'flex-row'
-              }`}
-            >
-              {/* Avatar */}
-              <div className="flex-shrink-0 pt-0.5">
-                <div
-                  className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden flex items-center justify-center ring-1 shadow-sm ${
-                    isUser
-                      ? 'bg-zinc-800 ring-zinc-700/80'
-                      : 'bg-violet-950/60 ring-violet-700/50'
-                  }`}
-                >
-                  {isUser ? (
-                    session.userPersona.avatar ? (
-                      <img
-                        src={session.userPersona.avatar}
-                        alt={session.userPersona.name}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      <User className="w-4 h-4 text-zinc-300" />
-                    )
-                  ) : session.character.avatar ? (
-                    <img
-                      src={session.character.avatar}
-                      alt={session.character.name}
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = 'none';
-                      }}
-                    />
-                  ) : (
-                    <Bot className="w-4 h-4 text-violet-300" />
-                  )}
-                </div>
-              </div>
-
-              {/* Message Content & Controls */}
-              <div
-                className={`flex flex-col max-w-[86%] sm:max-w-[80%] ${
-                  isUser ? 'items-end' : 'items-start'
-                }`}
-              >
-                {/* Header (Speaker Name, Turn #, Timestamp) */}
-                <div
-                  className={`flex items-center gap-2 mb-1.5 text-xs text-zinc-400 select-none ${
-                    isUser ? 'flex-row-reverse' : 'flex-row'
-                  }`}
-                >
-                  <span className="font-medium text-zinc-200">
-                    {isUser ? session.userPersona.name || 'User' : session.character.name}
-                  </span>
-                  <span className="text-zinc-600">•</span>
-                  <span className="text-[11px] text-zinc-500 font-mono">
-                    Turn {index}
-                  </span>
-                  <span className="text-zinc-600">•</span>
-                  <span className="text-[11px] text-zinc-500">{timestamp}</span>
-
-                  {/* Real token counter - ONLY shown if model returned verified usage */}
-                  {hasVerifiedTokenUsage && (
-                    <span
-                      title={`Verified token count: ${node.tokenUsage?.total_tokens} total (${node.tokenUsage?.prompt_tokens ?? 0} prompt, ${node.tokenUsage?.completion_tokens ?? 0} response)`}
-                      className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-mono text-zinc-400 bg-zinc-850 border border-zinc-700/60"
-                    >
-                      <Hash className="w-2.5 h-2.5 text-zinc-500" />
-                      {node.tokenUsage?.total_tokens}t
-                    </span>
-                  )}
-                </div>
-
-                {/* Bubble Container */}
-                <div
-                  className={`relative rounded-2xl p-4 sm:p-5 transition-all text-sm sm:text-base border shadow-md ${
-                    isUser
-                      ? 'bg-zinc-850/90 text-zinc-100 border-zinc-750 rounded-tr-sm'
-                      : 'bg-zinc-900/90 text-zinc-200 border-zinc-800/80 rounded-tl-sm'
-                  }`}
-                >
-                  <RoleplayMarkdown content={displayContent} role={node.role} />
-
-                  {/* Pulsing indicator when generating */}
-                  {isCurrentStreamingNode && (
-                    <span className="inline-block w-2 h-4 ml-1 bg-violet-400 animate-pulse align-middle" />
-                  )}
-                </div>
-
-                {/* Inline Controls (Branch Navigator, Edit, Regenerate, Copy) */}
-                <div
-                  className={`mt-2 flex items-center gap-1.5 flex-wrap select-none transition-opacity ${
-                    isUser ? 'justify-end' : 'justify-start'
-                  } ${isStreaming ? 'pointer-events-none opacity-40' : 'opacity-85 sm:opacity-75 sm:group-hover:opacity-100'}`}
-                >
-                  {/* Branch Traversal Controls (< n / m >) */}
-                  {siblingInfo.hasSiblings && (
-                    <div className="flex items-center rounded-lg bg-zinc-900/90 border border-zinc-800 px-1 py-0.5 text-xs text-zinc-300 shadow-sm mr-1">
-                      <button
-                        id={`btn-prev-branch-${node.id}`}
-                        onClick={() => onSwitchBranch(node.id, 'prev')}
-                        className="p-1 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded transition-colors cursor-pointer"
-                        title="Previous alternate branch"
-                      >
-                        <ChevronLeft className="w-3.5 h-3.5" />
-                      </button>
-                      <span className="px-1.5 font-mono text-[11px] text-zinc-300">
-                        {siblingInfo.currentIndex + 1} / {siblingInfo.totalSiblings}
-                      </span>
-                      <button
-                        id={`btn-next-branch-${node.id}`}
-                        onClick={() => onSwitchBranch(node.id, 'next')}
-                        className="p-1 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded transition-colors cursor-pointer"
-                        title="Next alternate branch"
-                      >
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Edit Message Button */}
-                  <button
-                    id={`btn-edit-${node.id}`}
-                    onClick={() => onEditMessage(node)}
-                    className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 rounded-md transition-colors cursor-pointer border border-transparent hover:border-zinc-700/60"
-                    title={isUser ? "Edit & Resend (branches conversation)" : "Edit response text"}
-                  >
-                    <Edit3 className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Edit</span>
-                  </button>
-
-                  {/* Regenerate Button (Assistant only) */}
-                  {!isUser && (
-                    <button
-                      id={`btn-regen-${node.id}`}
-                      onClick={() => onRegenerate(node.id)}
-                      disabled={isStreaming}
-                      className="flex items-center gap-1 px-2 py-1 text-xs text-violet-400 hover:text-violet-300 hover:bg-violet-950/40 rounded-md transition-colors cursor-pointer border border-transparent hover:border-violet-800/50 disabled:opacity-40"
-                      title="Generate alternate response branch from parent"
-                    >
-                      <RotateCw className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">Regenerate</span>
-                    </button>
-                  )}
-
-                  {/* Continue Button (Assistant only) */}
-                  {!isUser && !isCurrentStreamingNode && (
-                    <button
-                      id={`btn-continue-${node.id}`}
-                      onClick={() => onContinue(node.id)}
-                      disabled={isStreaming}
-                      className="flex items-center gap-1 px-2 py-1 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-950/40 rounded-md transition-colors cursor-pointer border border-transparent hover:border-amber-800/50 disabled:opacity-40"
-                      title="Continue writing response seamlessly from where it stopped"
-                    >
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      <span className="hidden sm:inline">Continue</span>
-                    </button>
-                  )}
-
-                  {/* Copy Button */}
-                  <button
-                    id={`btn-copy-${node.id}`}
-                    onClick={() => handleCopy(node.id, displayContent)}
-                    className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/80 rounded-md transition-colors cursor-pointer"
-                    title="Copy message to clipboard"
-                  >
-                    {copiedNodeId === node.id ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        <span className="text-emerald-400 text-[11px]">Copied</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Copy</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
+              nodeId={node.id}
+              isUser={isUser}
+              displayContent={displayContent}
+              timestamp={timestamp}
+              turnIndex={index}
+              hasVerifiedTokenUsage={!!hasVerifiedTokenUsage}
+              totalTokens={node.tokenUsage?.total_tokens}
+              promptTokens={node.tokenUsage?.prompt_tokens}
+              completionTokens={node.tokenUsage?.completion_tokens}
+              userName={session.userPersona.name || 'User'}
+              userAvatar={session.userPersona.avatar || ''}
+              charName={session.character.name || 'Character'}
+              charAvatar={session.character.avatar || ''}
+              siblingIndex={siblingInfo.currentIndex}
+              siblingTotal={siblingInfo.totalSiblings}
+              hasSiblings={siblingInfo.hasSiblings}
+              isStreaming={isStreaming}
+              isCurrentStreamingNode={isCurrentStreamingNode}
+              retryNotice={retryNotice}
+              isCopied={copiedNodeId === node.id}
+              onSwitchBranch={onSwitchBranch}
+              onRegenerate={onRegenerate}
+              onContinue={onContinue}
+              onEdit={() => onEditMessage(node)}
+              onCopy={() => handleCopy(node.id, displayContent)}
+            />
           );
         })}
       </div>

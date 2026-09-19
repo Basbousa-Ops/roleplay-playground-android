@@ -128,15 +128,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   return (
-    <div className="border-t border-zinc-800/80 bg-zinc-950/90 backdrop-blur-md px-3 sm:px-6 py-3.5 sm:py-4 sticky bottom-0 z-20">
+    <div className="border-t border-zinc-800/80 bg-zinc-950/90 backdrop-blur-md px-3 sm:px-6 py-3.5 sm:py-4 sticky bottom-0 z-20 flex-shrink-0">
       <div className="max-w-4xl mx-auto flex flex-col gap-2">
-        {/* Quick action tags & helpers */}
-        <div className="flex items-center justify-between text-[11px] text-zinc-400 select-none px-1">
-          <div className="flex items-center gap-2 flex-wrap">
+        {/* Quick action tags & helpers — horizontal scroll on phones so the
+            toolbar never wraps into a tall stack that squeezes the chat */}
+        <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-400 select-none px-1">
+          <div className="flex items-center gap-2 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-visible py-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <button
               type="button"
               onClick={insertActionWrapper}
-              className="text-zinc-400 hover:text-violet-300 font-serif italic hover:bg-zinc-850 px-1.5 py-0.5 rounded border border-zinc-800 transition-colors cursor-pointer"
+              className="flex-shrink-0 text-zinc-400 hover:text-violet-300 font-serif italic hover:bg-zinc-850 px-1.5 py-0.5 rounded border border-zinc-800 transition-colors cursor-pointer"
               title="Wrap in *asterisks* for narrative actions"
             >
               *narrative action*
@@ -151,7 +152,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 type="button"
                 id="btn-quick-continue-reply"
                 onClick={onContinueLast}
-                className="text-amber-400 hover:text-amber-300 hover:bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/60 transition-colors cursor-pointer flex items-center gap-1 font-medium text-[11px] animate-fadeIn"
+                className="flex-shrink-0 text-amber-400 hover:text-amber-300 hover:bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/60 transition-colors cursor-pointer flex items-center gap-1 font-medium text-[11px] animate-fadeIn"
                 title="Ask character to continue writing from the exact end of the previous message"
               >
                 <Play className="w-3 h-3 fill-current" />
@@ -165,7 +166,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 type="button"
                 id="btn-chat-toggle-thinking-level"
                 onClick={onCycleThinkingLevel}
-                className={`px-2.5 py-0.5 rounded border transition-all cursor-pointer flex items-center gap-1.5 font-medium text-[11px] ${
+                className={`flex-shrink-0 px-2.5 py-0.5 rounded border transition-all cursor-pointer flex items-center gap-1.5 font-medium text-[11px] ${
                   thinkingLevel === 'high'
                     ? 'bg-violet-950/80 border-violet-500/80 text-violet-200 shadow-sm'
                     : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-zinc-100 hover:border-zinc-700'
@@ -186,7 +187,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               type="button"
               id="btn-chat-toggle-spellcheck"
               onClick={handleToggleSpellCheck}
-              className={`px-2.5 py-0.5 rounded border transition-all cursor-pointer flex items-center gap-1.5 font-medium text-[11px] ${
+              className={`flex-shrink-0 px-2.5 py-0.5 rounded border transition-all cursor-pointer flex items-center gap-1.5 font-medium text-[11px] ${
                 isSpellCheckEnabled
                   ? 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-zinc-100 hover:border-zinc-700'
                   : 'bg-zinc-900/50 border-zinc-850 text-zinc-500 hover:text-zinc-400'

@@ -29,6 +29,7 @@ import {
   switchBranch,
   appendChildNode,
   updateNodeContent,
+  removeLeafNode,
 } from './lib/tree';
 import {
   streamGeminiChat,
@@ -149,6 +150,12 @@ export default function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [streamingNodeId, setStreamingNodeId] = useState<string | null>(null);
+  const [retryNotice, setRetryNotice] = useState<string | null>(null);
+  const [generationError, setGenerationError] = useState<{
+    message: string;
+    retryUserNodeId?: string;
+    retryContinueNodeId?: string;
+  } | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Modals & Drawers
@@ -460,6 +467,8 @@ export default function App() {
     if (isStreaming) {
       handleStopGeneration();
     }
+    setGenerationError(null);
+    setRetryNotice(null);
     setActiveSessionId(id);
   };
 
@@ -501,6 +510,8 @@ export default function App() {
     setIsStreaming(true);
     setStreamingContent('');
     setStreamingNodeId(assistantNodeId);
+    setRetryNotice(null);
+    setGenerationError(null);
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -519,6 +530,10 @@ export default function App() {
       onToken: (_token, accumulated) => {
         accumulatedText = accumulated;
         setStreamingContent(accumulated);
+        setRetryNotice(null);
+      },
+      onRetry: (_attempt, _max, _delayMs, reason) => {
+        setRetryNotice(reason);
       },
       onDone: (fullText, verifiedUsage) => {
         const finalContent = fullText || accumulatedText;
@@ -533,24 +548,37 @@ export default function App() {
         setIsStreaming(false);
         setStreamingContent('');
         setStreamingNodeId(null);
+        setRetryNotice(null);
         abortControllerRef.current = null;
       },
       onError: (err) => {
         console.error('Gemma streaming error:', err);
-        const fallbackText = `*The generation encountered an interruption: ${err.message}. Please verify your Google AI Studio API key in Settings.*`;
-        const errorSession = updateNodeContent(
-          sessionWithAssistant,
-          assistantNodeId,
-          fallbackText
-        );
-        updateActiveSession(errorSession);
-        syncSessionIfConnected(errorSession);
+        // Remove the empty placeholder instead of baking the error text into
+        // the chat tree (it would otherwise pollute all future requests).
+        const cleanedSession = removeLeafNode(sessionWithAssistant, assistantNodeId);
+        updateActiveSession(cleanedSession);
+        syncSessionIfConnected(cleanedSession);
+        setGenerationError({ message: err.message, retryUserNodeId: userNodeId });
         setIsStreaming(false);
         setStreamingContent('');
         setStreamingNodeId(null);
+        setRetryNotice(null);
         abortControllerRef.current = null;
       },
     });
+  };
+
+  // Retry a failed generation from the error banner (chat tree is untouched).
+  const handleRetryFailed = async () => {
+    if (!activeSession || !generationError || isStreaming) return;
+    const failed = generationError;
+    setGenerationError(null);
+    if (failed.retryUserNodeId) {
+      if (!activeSession.nodes[failed.retryUserNodeId]) return;
+      await triggerCompletion(activeSession, failed.retryUserNodeId);
+    } else if (failed.retryContinueNodeId) {
+      await handleContinueResponse(failed.retryContinueNodeId);
+    }
   };
 
   // Send new message
@@ -565,6 +593,7 @@ export default function App() {
 
     const userText = input.trim();
     setInput('');
+    setGenerationError(null);
 
     // Append user node under the current active leaf
     const parentId = activeSession.activeLeafId;
@@ -616,6 +645,8 @@ export default function App() {
     setIsStreaming(true);
     setStreamingNodeId(assistantNodeId);
     setStreamingContent(existingText);
+    setRetryNotice(null);
+    setGenerationError(null);
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -637,6 +668,10 @@ export default function App() {
             ? ' '
             : '';
         setStreamingContent(existingText + separator + accumulated);
+        setRetryNotice(null);
+      },
+      onRetry: (_attempt, _max, _delayMs, reason) => {
+        setRetryNotice(reason);
       },
       onDone: (fullText, verifiedUsage) => {
         const addition = fullText || streamedAddition;
@@ -657,13 +692,17 @@ export default function App() {
         setIsStreaming(false);
         setStreamingContent('');
         setStreamingNodeId(null);
+        setRetryNotice(null);
         abortControllerRef.current = null;
       },
       onError: (err) => {
         console.error('Gemma continuation error:', err);
+        // Original message is untouched (partial text was never written).
+        setGenerationError({ message: err.message, retryContinueNodeId: assistantNodeId });
         setIsStreaming(false);
         setStreamingContent('');
         setStreamingNodeId(null);
+        setRetryNotice(null);
         abortControllerRef.current = null;
       },
     });
@@ -714,6 +753,7 @@ export default function App() {
       abortControllerRef.current = null;
     }
     setIsStreaming(false);
+    setRetryNotice(null);
     if (streamingNodeId && activeSession) {
       const updated = updateNodeContent(
         activeSession,
@@ -879,7 +919,7 @@ export default function App() {
 
   if (!activeSession) {
     return (
-      <div className="flex h-screen items-center justify-center bg-zinc-950 text-zinc-300">
+      <div className="flex h-dvh items-center justify-center bg-zinc-950 text-zinc-300">
         <div className="text-center space-y-4">
           <p>Initializing Roleplay Playground...</p>
           <button
@@ -921,11 +961,38 @@ export default function App() {
         isStreaming={isStreaming}
         streamingContent={streamingContent}
         streamingNodeId={streamingNodeId}
+        retryNotice={retryNotice}
         onSwitchBranch={handleSwitchBranch}
         onRegenerate={handleRegenerate}
         onContinue={handleContinueResponse}
         onEditMessage={(node) => setEditingNode(node)}
       />
+
+      {/* Generation error banner (failed node was removed, chat untouched) */}
+      {generationError && !isStreaming && (
+        <div className="px-3 sm:px-6 pb-2 bg-zinc-950/90">
+          <div className="max-w-4xl mx-auto flex items-start gap-2.5 p-3 rounded-xl bg-amber-950/40 border border-amber-800/60 text-amber-200 text-xs animate-fadeIn">
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold">Generation failed</p>
+              <p className="text-[11px] text-amber-300/80 mt-0.5">{generationError.message}</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleRetryFailed}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-600 hover:bg-amber-500 text-white transition-colors cursor-pointer flex-shrink-0"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={() => setGenerationError(null)}
+              className="px-2 py-1.5 text-xs text-amber-300/70 hover:text-amber-200 cursor-pointer flex-shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Bottom Chat Input */}
       <ChatInput
